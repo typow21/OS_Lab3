@@ -2,9 +2,12 @@
 ## Program design
 
 This program is made of three main parts. The three parts are split up using threads. This makes it more efficient and even more accurate. The three parts are the main thread, the 'worker thread' and the log thread. 
+
 ***Main Thread***
 The main thread loads in the default dictionary or the selected dictionary by the user that starts the server. The main thread also creates the other threads. These other threads are the multiple worker threads and the log thread. The main thread is also responsible for initializing network connection and waiting for clients to connect. Finally it is the main thread's job to place the socket descriptor on the connection queue. 
+
 ***Worker Threads***
 There are an n number of worker threads. In the program that I created there are 4 worker threads. Each thread is used for each individual computer or connection to the server. The worker thread is very important and has very important responsibilities. The first thing the worker threads must do is remove the socket descriptor from the connection queue. From there the worker thread needs to read from the user to get a word to check. Next it checks that word with the given dictionary and replies whether or not that word was spelled correctly. The word and the correctness is then added to the log  queue to later be added to the log.txt file. It does this in a loop untill the user cuts off the connection to the server. Finally it closes the socket. 
+
 ***Log Threads***
 The log thread is pretty basic and does some small but important things. Once the server starts, the log thread creates a log txt file. The thread then removes the string from the worker thread from the log buffer. Lastly, the log file appends the string to the log file. 
