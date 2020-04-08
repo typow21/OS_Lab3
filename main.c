@@ -9,7 +9,7 @@
 #include <ctype.h>
 
 #define size 100000
-#define N_THREADS 2 // how many threads should there be? --> Just 2 for the worker and log thread
+#define N_THREADS 4 // how many threads should there be? --> Just 2 for the worker and log thread
 #define DEFAULT_DICTIONARY "dictionary.txt"
 #define DEFAULT_PORT 8888
 #define MAX 10000 //not sure if this is the correct number?
@@ -21,18 +21,23 @@ void networkConnection();
 void getWord();
 int check_dictionary(char *word);
 
+void spawn_worker_threads();
 void *workerThread(void *arg);
 void *logThread(void *arg);
-void put(int value);
-int get();
-void addSocketToBuffer(int socket);
-void removeSocketFromBuffer(int socket);
+void put_connQ(int value);
+int get_connQ();
+void put_logQ(char* response)
+char* get_logQ()
 
 // global variables
 char *dict[size];
 int portNumber = -1;
 char *dictName = NULL; 
 int dictLen = 0;
+
+// Network Variables
+int socket_desc, new_socket, c;
+struct sockaddr_in server, client;
 
 // Declaring your mutex variables and cond variables
 // need four cond variables (2 per queue, one each for empty, the other for full)
@@ -73,17 +78,25 @@ int main(int argc, char *argv[]){
             //     printf("%s\n", dict[i]);
             // }
     // initVariables(); // init variables here?
-    // networkConnection(); //network init
+    spawn_worker_threads();
+    networkConnection(); //network init
+    // c = sizeof(struct sockaddr_in);
+    // listen(socket_desc, 3);
     // main loop 
-    // while(1){
-    //     // get connection file descriptor
-    //     int fd = accept(socket_desc, (struct sockaddr *) &client, (socketlen_t *) &c);
-    //     if(fd < 0){
-    //         // print error and continue;
-    //     }
-    //     addSocketToQueue(fd); // are there multiple queues?
-    // }
-    getWord(); // gets word from user that then checks dictionary
+    while(1){
+        // get connection file descriptor
+        puts("Waiting for incoming connections...");
+        printf("Socket: %d\n", socket_desc);
+        int fd = accept(socket_desc, (struct sockaddr *) &client, (socklen_t *) &c);
+        if(fd < 0){
+            perror("Error:");
+            continue;
+        }
+        puts("Connection accepted");
+        put_connQ(fd); // are there multiple queues?
+    }
+    
+    // getWord(); // gets word from user that then checks dictionary
 
 }
 
@@ -195,7 +208,30 @@ void spawn_worker_threads(){
 void *workerThread(void *arg){
     // THE CODE BELOW IS FROM SLIDE 10 WEEK 10 BUT IS ONLY PSEUDOCODE
     while(1){
-        // socket_desc = removeSocketFromQueue(); // that function has not been yet
+        char* word = calloc(MAX, 1);
+        int socket = get_connQ();// that function has not been yet
+        while(read(socket, word, MAX) > 0){
+            word[strlen(word)- 1] = '\0'; // this won't get it all
+            int wasFound = check_dictionary(word);
+                char *response;
+                if(wasFound){
+                    // strcat(word , ": OK\n");
+                    // word = realloc(word, sizeof(char*)*25);
+                    // strcat(word, ": OK\n");
+                    response = ": OK\n";
+                }else{
+                    // strcat(word , ": MISPELLED\n");
+                    // word = realloc(word, sizeof(char*)*25);
+                    // strcat(word, ": MISPELLED\n");
+                    // printf("Test%cTest", response[strlen(response)]);
+                    response = ": MISPELLED\n";
+                }
+                send(socket, response, strlen(response), 0);
+                // printf("REached");
+                // printf("%s", response);
+                addToLogQueue(response);
+        }
+        close(socket);
         // while(read(socket_desc, word) > 0){
         //     wasFound = checkWordInDictionary(buffer);
         //     if(wasFound){
@@ -225,9 +261,6 @@ void *logThread(void *arg){
 
 // Works I think?
 void networkConnection(){
-     int portNumber = 8888;
-    int socket_desc, new_socket, c;
-    struct sockaddr_in server, client;
     char *message;
     // Create socket (create active socket descriptor)
     socket_desc = socket(AF_INET, SOCK_STREAM, 0);
@@ -247,24 +280,18 @@ void networkConnection(){
     }
     puts("Bind done.");
     // Listen (converts active socket to a LISTENING socket which can accept connections)
-    listen(socket_desc, 3);
-    puts("Waiting for incoming connections...");
-    while (1){
-	c = sizeof(struct sockaddr_in);
-	new_socket = accept(socket_desc, (struct sockaddr*)&client, (socklen_t*)&c);
-	if (new_socket < 0){
-	    puts("Error: Accept failed");
-	    continue;
-	}
-	puts("Connection accepted");
+    c = sizeof(struct sockaddr_in);
+    if(listen(socket_desc, 3) != 0){
+        printf("Fuck something went wrong");
+    }
 	// do something with new_socket
     //THIS CODE IS AT 12:37 OF MATT'S 3/25 LECTURE I THINK
-    char buffer[256];
-    memset(buffer, 0, 256);
-    printf("%s\n", buffer);
-    buffer[strlen(buffer) - 1] = '\0';
-    close(new_socket);
-    }
+    // char buffer[256];
+    // memset(buffer, 0, 256);
+    // printf("%s\n", buffer);
+    // buffer[strlen(buffer) - 1] = '\0';
+    // close(new_socket);
+    
 }
 
 //CIRCULAR BUFFER
@@ -276,41 +303,38 @@ int use_ptr = 0;
 int count = 0;
 
 // add to the buffer 
-void put(int value){
+void put_connQ(int value){
+    printf("Put onto queue: Reached: %d\n", MAX);
+    pthread_mutex_lock(&mutex_connQ);
+    while(count == MAX){
+        pthread_cond_wait(&empty_connQ, &mutex_connQ);
+    }
     buffer[fill_ptr] = value;
     fill_ptr = (fill_ptr + 1) % MAX;
     count++;
+    printf("Buffer: %d\n", value);
+    pthread_cond_signal(&fill_connQ);
+    pthread_mutex_unlock(&mutex_connQ);
 }
 
 // get from the buffer (taken from chapter 30 of 3 easy pieces)
-int get(){
+int get_connQ(){
+    pthread_mutex_lock(&mutex_connQ);
+    while(count == 0){
+        pthread_cond_wait(&fill_connQ, &mutex_connQ);
+    }
     int tmp = buffer[use_ptr];
     use_ptr = (use_ptr + 1) % MAX;
     count--;
+    pthread_cond_signal(&empty_connQ);
+    pthread_mutex_unlock(&mutex_connQ);
     return tmp;
 }
 
-// Taken from slide 18 and slide 20 on lab slides week 9
-// Mutext Lock on the queue 
-void addSocketToBuffer(int socket){
-    // pthread_mutex_lock(&mutex); // aquire lock
-    // // check condition
+void put_logQ(char* response){
 
-    // // psudeo code
-    // while(buffer is full){
-    //     // block thread if buffer is full
-    //     pthread_cond_wait(&empty, &mutex);
-    // }
-
-    // // add socket to queue here 
-    // // use the put function?
-
-    // // signal that socket has been filled
-    // pthread_cond_signal(&fill, &mutex);
-    // pthread_mutex_unlock(&mutex); // release lock
 }
 
-// is there code for this or something??
-void removeSocketFromBuffer(int socket){
+char* get_logQ(){
 
 }
