@@ -22,12 +22,13 @@ void getWord();
 int check_dictionary(char *word);
 
 void spawn_worker_threads();
+void spawn_log_thread();
 void *workerThread(void *arg);
 void *logThread(void *arg);
 void put_connQ(int value);
 int get_connQ();
-void put_logQ(char* response)
-char* get_logQ()
+void put_logQ(char* response);
+char* get_logQ();
 
 // global variables
 char *dict[size];
@@ -35,6 +36,15 @@ int portNumber = -1;
 char *dictName = NULL; 
 int dictLen = 0;
 
+int buffer[MAX]; 
+int fill_ptr = 0;
+int use_ptr = 0;
+int count = 0;
+
+char *logBuff[MAX];
+int index_log = 0;
+int fill_log = 0;
+int use_log = 0;
 // Network Variables
 int socket_desc, new_socket, c;
 struct sockaddr_in server, client;
@@ -79,6 +89,7 @@ int main(int argc, char *argv[]){
             // }
     // initVariables(); // init variables here?
     spawn_worker_threads();
+    spawn_log_thread();
     networkConnection(); //network init
     // c = sizeof(struct sockaddr_in);
     // listen(socket_desc, 3);
@@ -154,24 +165,6 @@ void initDict(){
 }
 
 // WORKS
-// gets input from user
-// checks dictionary
-void getWord(){
-    
-    char *line = NULL;
-    size_t line_size = 0;
-    while(getline(&line, &line_size, stdin) > 0){
-        line[strlen(line) - 1] = '\0'; // removes extra char
-        // Checks to see if word is in dictionary
-        if(check_dictionary(line)){
-            printf("Word found\n");
-        }else{
-            printf("Word not found\n");
-        }
-    }
-}
-
-// WORKS
 // Returns a 1 if the word is in the dictionary
 // Returns a 0 if the word is not in the dictionary
 int check_dictionary(char *word){
@@ -201,6 +194,18 @@ void spawn_worker_threads(){
     }
 }
 
+void spawn_log_thread(){
+    pthread_t threads[1];
+    for(size_t i = 0; i < 1; ++i){
+        if(pthread_create(&threads[i],
+                            NULL,
+                            logThread,
+                            NULL) != 0){
+            printf("Error: Failed to create thread\n");
+            exit(1);
+        }
+    }
+}
 // TO_DO
 // for worker thread and log thread make sure to fully error check!!
 
@@ -226,23 +231,12 @@ void *workerThread(void *arg){
                     // printf("Test%cTest", response[strlen(response)]);
                     response = ": MISPELLED\n";
                 }
+                put_logQ(response);
                 send(socket, response, strlen(response), 0);
                 // printf("REached");
                 // printf("%s", response);
-                addToLogQueue(response);
         }
         close(socket);
-        // while(read(socket_desc, word) > 0){
-        //     wasFound = checkWordInDictionary(buffer);
-        //     if(wasFound){
-        //         response = word + "OK";
-        //     }else{
-        //         response = word + "MISPELLED";
-        //     }
-        //     write(socket_desc, response);
-        //     addToLogQueue(response);
-        // }
-        // close(socket_desc);
     }
 }
 
@@ -250,12 +244,26 @@ void *workerThread(void *arg){
 void *logThread(void *arg){
     // THE CODE BELOW IS FROM SLIDE 11 WEEK 10 BUT IS ONLY PSEUDOCODE
     // create log file here
+    printf("REACHED\n");
+    FILE *logFile = fopen("LOG.txt", "w");
+    if(logFile == NULL){
+        printf("Error opening log file");
+        exit(0);
+    }
+    // int fd_log =fileno(logFile);
+    // if (fputs(response, logFile) >= 0)
     while(1){
+        char *response = get_logQ();
         // remove string form buffer 
-        // response = removeFromLogBuffer();
-        // write(logFile, response);
-        // // TO_DO: possibly add fflush here
-        // free(response); // make sure you free if you malloc
+        if(fputs(response, logFile) > -1){
+            fflush(logFile);
+            printf("Successful write to file\n");
+        }else{
+            printf("Something went wrong writing to log file\n");
+        }
+        // write(fd_log, response, 0);
+        // TO_DO: possibly add fflush here
+        free(response); // make sure you free if you malloc
     }
 }
 
@@ -297,11 +305,6 @@ void networkConnection(){
 //CIRCULAR BUFFER
 // (maybe chance variable names?) got from slide 15 and 16 on lab slides week 9
 // Buffer variables
-int buffer[MAX]; 
-int fill_ptr = 0;
-int use_ptr = 0;
-int count = 0;
-
 // add to the buffer 
 void put_connQ(int value){
     printf("Put onto queue: Reached: %d\n", MAX);
@@ -312,7 +315,7 @@ void put_connQ(int value){
     buffer[fill_ptr] = value;
     fill_ptr = (fill_ptr + 1) % MAX;
     count++;
-    printf("Buffer: %d\n", value);
+    // printf("Buffer: %d\n", value);
     pthread_cond_signal(&fill_connQ);
     pthread_mutex_unlock(&mutex_connQ);
 }
@@ -331,10 +334,28 @@ int get_connQ(){
     return tmp;
 }
 
-void put_logQ(char* response){
 
+void put_logQ(char* response){
+    pthread_mutex_lock(&mutex_logQ);
+    if(index_log == MAX){
+        pthread_cond_wait(&fill_logQ, &mutex_logQ);
+    }
+    logBuff[index_log] = response;
+    index_log++;
+    pthread_cond_signal(&fill_logQ);
+    pthread_mutex_unlock(&mutex_logQ);
 }
 
 char* get_logQ(){
-
+    pthread_mutex_lock(&mutex_logQ);
+    while(index_log == 0){
+        pthread_cond_wait(&fill_logQ, &mutex_logQ);
+    }
+    printf("Response: %s", logBuff[index_log] );
+    char* tmp = logBuff[index_log];
+    index_log--;
+    printf("TMP %s", tmp);
+    pthread_cond_signal(&empty_logQ);
+    pthread_mutex_unlock(&mutex_logQ);
+    return tmp;
 }
